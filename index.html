@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="description" content="Juega con tus amigos a ¿Quién es más probable? Vota, ríe y descubre quién es quién." />
+  <meta name="theme-color" content="#07060e" />
+  <title>¿Quién es más probable? 🎯</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN: LOGIN
+       ══════════════════════════════════════════════════════ -->
+  <div id="screen-login" class="screen active">
+    <div class="container center-content">
+      <div class="logo-section">
+        <div class="emoji-float">🎯</div>
+        <h1 class="title-glow">¿Quién es<br />más probable?</h1>
+        <p class="subtitle">Juega con tus amigos y descubre quién es quién</p>
+      </div>
+
+      <div class="card glass fade-up" style="animation-delay:0.2s">
+        <input
+          type="text"
+          id="input-name"
+          class="input"
+          placeholder="Tu nombre"
+          maxlength="15"
+          autocomplete="off"
+          spellcheck="false"
+        />
+
+        <button id="btn-create" class="btn btn-primary btn-large">
+          🎲 Crear sala
+        </button>
+
+        <div class="divider"><span>o</span></div>
+
+        <div class="join-row">
+          <input
+            type="text"
+            id="input-code"
+            class="input input-code"
+            placeholder="Código"
+            maxlength="4"
+            autocomplete="off"
+            spellcheck="false"
+            style="text-transform:uppercase"
+          />
+          <button id="btn-join" class="btn btn-secondary">
+            Unirse
+          </button>
+        </div>
+
+        <p id="login-error" class="error-text"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN: CONNECTING (loading)
+       ══════════════════════════════════════════════════════ -->
+  <div id="screen-connecting" class="screen">
+    <div class="container center-content">
+      <div class="spinner"></div>
+      <p class="connecting-text" id="connecting-text">Conectando…</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN: LOBBY
+       ══════════════════════════════════════════════════════ -->
+  <div id="screen-lobby" class="screen">
+    <div class="container">
+      <div class="lobby-header fade-up">
+        <div class="lobby-icon">👥</div>
+        <h2>Sala de espera</h2>
+        <div class="room-code-display">
+          <span class="room-code-label">Código:</span>
+          <span class="room-code-value" id="room-code-value">----</span>
+          <button class="btn-copy" id="btn-copy-code" title="Copiar código">📋</button>
+        </div>
+        <div class="player-badge">
+          <span id="player-count">0</span> jugadores
+        </div>
+      </div>
+
+      <div class="card glass fade-up" style="animation-delay:0.15s">
+        <div id="players-list" class="players-list">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+
+      <button id="btn-ready" class="btn btn-primary btn-large fade-up" style="animation-delay:0.3s">
+        <span class="btn-text">Estoy listo</span>
+      </button>
+
+      <p class="hint-text fade-up" style="animation-delay:0.4s">
+        Todos deben pulsar <strong>«Estoy listo»</strong> para empezar (mínimo 2)
+      </p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN: QUESTION + VOTING
+       ══════════════════════════════════════════════════════ -->
+  <div id="screen-question" class="screen">
+    <div class="container">
+      <div class="question-header">
+        <div class="progress-info">
+          <span class="progress-label">Pregunta</span>
+          <span class="progress-numbers">
+            <span id="question-number">1</span>/<span id="total-questions">10</span>
+          </span>
+        </div>
+        <div class="progress-bar-track">
+          <div id="progress-fill" class="progress-bar-fill"></div>
+        </div>
+      </div>
+
+      <div class="card glass question-card fade-up">
+        <p class="question-prefix">¿Quién es más probable que…</p>
+        <h2 id="question-text" class="question-text"></h2>
+      </div>
+
+      <div id="vote-options" class="vote-options">
+        <!-- Vote buttons rendered here -->
+      </div>
+
+      <div id="vote-status" class="vote-status hidden">
+        <div class="pulse-ring"></div>
+        <span class="vote-waiting-text">Esperando votos</span>
+        <span class="vote-counter">
+          <span id="votes-cast">0</span> / <span id="votes-total">0</span>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN: ROUND RESULTS
+       ══════════════════════════════════════════════════════ -->
+  <div id="screen-round-results" class="screen">
+    <div class="container">
+      <div class="round-header fade-up">
+        <span class="round-label">📊 Resultado</span>
+        <p id="round-question" class="round-question-text"></p>
+      </div>
+
+      <div id="round-votes" class="round-votes">
+        <!-- Result bars rendered here -->
+      </div>
+
+      <div class="countdown-wrapper">
+        <div id="countdown-bar" class="countdown-bar"></div>
+      </div>
+      <p class="hint-text countdown-hint">Siguiente pregunta en unos segundos…</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════
+       SCREEN: GAME OVER
+       ══════════════════════════════════════════════════════ -->
+  <div id="screen-gameover" class="screen">
+    <div class="container">
+      <div class="gameover-header">
+        <div class="emoji-float trophy">🏆</div>
+        <h2 class="title-glow">¡Fin del juego!</h2>
+        <p class="subtitle">Aquí están los resultados finales</p>
+      </div>
+
+      <div id="final-ranking" class="final-ranking">
+        <!-- Ranking items rendered here -->
+      </div>
+
+      <button id="btn-play-again" class="btn btn-primary btn-large fade-up" style="animation-delay:0.5s">
+        🔄 Jugar de nuevo
+      </button>
+    </div>
+  </div>
+
+  <!-- PeerJS from CDN (no server needed) -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
