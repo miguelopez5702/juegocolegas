@@ -1,36 +1,22 @@
 /* ═══════════════════════════════════════════════════════════
-   ¿Quién es más probable?  —  PeerJS Client (GitHub Pages)
-   ═══════════════════════════════════════════════════════════
-   - One player is the HOST (creates the room).
-   - The host's browser manages ALL game state.
-   - Other players are CLIENTS that connect via WebRTC (PeerJS).
-   - All communication is peer-to-peer, no server needed.
+   ¿Quién es más probable?  —  Google Sheets / Apps Script Edition
    ═══════════════════════════════════════════════════════════ */
 
-// ── Constants ──────────────────────────────────────────────
-const ROOM_PREFIX = 'qemp-';
+// ¡IMPORTANTE! Reemplaza esta URL con la URL de tu Web App de Google Apps Script
+const API_URL = 'https://script.google.com/macros/s/AKfycbwf3hunx-Z5JDTbfaklBmClidooS28958M6ydn_I9zatLOHpv_C25k8On8gzPfw3Bea/exec';
+
 const ADVANCE_DELAY = 7000;
 
 // ── State ──────────────────────────────────────────────────
-let peer = null;
+let myId = '';
 let myName = '';
 let roomCode = '';
 let isHost = false;
 let hasVoted = false;
 let isReady = false;
 
-// Host-only state
-let hostConns = new Map();
-let questions = [];
-let gameState = 'lobby';
-let currentQuestionIndex = 0;
-let currentVotes = new Map();
-let stats = {};
-let roundHistory = [];
-let advanceTimer = null;
-
-// Client-only state
-let hostConn = null;
+let pollInterval = null;
+let lastStateStr = '';
 
 // ── DOM Refs ───────────────────────────────────────────────
 const screens = {
@@ -85,13 +71,6 @@ function showError(msg) {
 }
 
 // ── Utilities ──────────────────────────────────────────────
-function generateCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return code;
-}
-
 function getInitial(name) {
   return name.charAt(0).toUpperCase();
 }
@@ -110,372 +89,133 @@ function log(msg) {
   console.log(`[QEMP] ${msg}`);
 }
 
-// Safe send: works with both json serialization and string
-function safeSend(conn, obj) {
+// ── API Communication ──────────────────────────────────────
+async function apiCall(action, data = {}) {
+  data.action = action;
   try {
-    if (conn && conn.open) {
-      conn.send(obj);
-      return true;
-    }
-  } catch (e) {
-    log('Error sending: ' + e.message);
-  }
-  return false;
-}
-
-// Parse incoming data (handles both object and string)
-function parseMsg(raw) {
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw); } catch (e) { return null; }
-  }
-  return raw;
-}
-
-// ═══════════════════════════════════════════════════════════
-// PEER SETUP
-// ═══════════════════════════════════════════════════════════
-
-function createPeer(id) {
-  return new Promise((resolve, reject) => {
-    const opts = {
-      debug: 1, // 1 = errors only in console
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-          { urls: 'stun:stun3.l.google.com:19302' },
-          { urls: 'stun:stun4.l.google.com:19302' },
-        ],
+    const params = new URLSearchParams();
+    params.append('data', JSON.stringify(data));
+    
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
       },
-    };
-
-    log('Creating peer' + (id ? ` with ID: ${id}` : ' with random ID'));
-    const p = id ? new Peer(id, opts) : new Peer(opts);
-
-    let settled = false;
-
-    const timeout = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        p.destroy();
-        reject(new Error('No se pudo conectar al servidor. Comprueba tu conexión a internet.'));
-      }
-    }, 15000);
-
-    p.on('open', (assignedId) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        log('Peer connected with ID: ' + assignedId);
-        resolve(p);
-      }
+      body: params
     });
-
-    p.on('error', (err) => {
-      log('Peer error: ' + err.type + ' - ' + err.message);
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-
-        // Translate PeerJS error types to user-friendly messages
-        let userMsg = err.message;
-        if (err.type === 'unavailable-id') {
-          userMsg = 'Esa sala ya existe. Prueba de nuevo.';
-        } else if (err.type === 'peer-unavailable') {
-          userMsg = 'No se encontró la sala. ¿El código es correcto?';
-        } else if (err.type === 'network') {
-          userMsg = 'Error de red. Comprueba tu conexión.';
-        } else if (err.type === 'server-error') {
-          userMsg = 'Servidor no disponible. Inténtalo en unos segundos.';
-        }
-        reject(new Error(userMsg));
-      } else {
-        // Error after peer was already created (late error)
-        if (err.type === 'peer-unavailable') {
-          // Client tried to connect to non-existent room - already handled
-          log('Late peer-unavailable error (ignored, handled elsewhere)');
-        }
-      }
-    });
-
-    p.on('disconnected', () => {
-      log('Peer disconnected from signaling server');
-      // Try to reconnect
-      if (!p.destroyed) {
-        log('Attempting to reconnect...');
-        p.reconnect();
-      }
-    });
-  });
-}
-
-// Cleanup peer and connections
-function destroyPeer() {
-  if (advanceTimer) clearTimeout(advanceTimer);
-  if (peer && !peer.destroyed) {
-    peer.destroy();
+    return await response.json();
+  } catch (error) {
+    console.error("API Error:", error);
+    return { error: error.message };
   }
-  peer = null;
-  hostConn = null;
-  hostConns = new Map();
 }
-
-// ═══════════════════════════════════════════════════════════
-// HOST LOGIC
-// ═══════════════════════════════════════════════════════════
 
 async function loadQuestions() {
   const resp = await fetch('preguntas.txt');
   if (!resp.ok) throw new Error('No se encontró el archivo de preguntas');
   const text = await resp.text();
-  questions = text.split('\n').map((q) => q.trim()).filter((q) => q.length > 0);
+  const questions = text.split('\n').map((q) => q.trim()).filter((q) => q.length > 0);
   if (questions.length === 0) throw new Error('El archivo de preguntas está vacío');
   log(`Loaded ${questions.length} questions`);
+  return questions;
 }
 
-function hostGetPlayersList() {
-  const list = [{ name: myName, ready: isReady, isHost: true }];
-  for (const [, data] of hostConns) {
-    list.push({ name: data.name, ready: data.ready, isHost: false });
-  }
-  return list;
-}
-
-function hostGetPlayerNames() {
-  return hostGetPlayersList().map((p) => p.name);
-}
-
-function hostBroadcast(msg) {
-  for (const [pid, data] of hostConns) {
-    safeSend(data.conn, msg);
-  }
-}
-
-function hostBroadcastPlayers() {
-  const players = hostGetPlayersList();
-  hostBroadcast({ type: 'players-update', players });
-  handlePlayersUpdate(players);
-}
-
-function hostHandleMessage(peerId, msg) {
-  const data = hostConns.get(peerId);
-  if (!data) return;
-
-  switch (msg.type) {
-    case 'ready': {
-      data.ready = !data.ready;
-      hostBroadcastPlayers();
-      hostCheckAllReady();
-      break;
-    }
-    case 'vote': {
-      if (gameState !== 'playing') break;
-      if (currentVotes.has(peerId)) break;
-      currentVotes.set(peerId, msg.name);
-      const voteUpdate = { type: 'vote-update', voted: currentVotes.size, total: hostGetPlayersList().length };
-      hostBroadcast(voteUpdate);
-      handleVoteUpdate(voteUpdate);
-      if (currentVotes.size === hostGetPlayersList().length) {
-        hostShowRoundResults();
+// ── Polling & State Management ─────────────────────────────
+async function pollState() {
+  if (!roomCode || !myId) return;
+  try {
+    const response = await fetch(`${API_URL}?action=poll&roomCode=${roomCode}&playerId=${myId}`);
+    const data = await response.json();
+    
+    if (data.error) {
+      if (data.error === "Room not found") {
+         clearInterval(pollInterval);
+         showError("La sala ha sido cerrada o ya no existe.");
+         showScreen('login');
       }
-      break;
+      return;
     }
+    
+    const stateStr = JSON.stringify(data);
+    if (stateStr !== lastStateStr) {
+      lastStateStr = stateStr;
+      handleStateUpdate(data);
+    }
+  } catch(e) {
+    console.error("Poll error:", e);
   }
 }
 
-function hostCheckAllReady() {
-  const players = hostGetPlayersList();
-  if (players.length >= 2 && players.every((p) => p.ready)) {
-    hostStartGame();
-  }
-}
+function handleStateUpdate(state) {
+  // Update players list
+  handlePlayersUpdate(state.players);
 
-function hostStartGame() {
-  gameState = 'playing';
-  currentQuestionIndex = 0;
-  stats = {};
-  roundHistory = [];
-
-  for (const p of hostGetPlayersList()) {
-    stats[p.name] = 0;
-  }
-
-  hostBroadcast({ type: 'game-started' });
-  hostSendQuestion();
-}
-
-function hostSendQuestion() {
-  currentVotes = new Map();
-  gameState = 'playing';
-
-  const msg = {
-    type: 'new-question',
-    question: questions[currentQuestionIndex],
-    questionNumber: currentQuestionIndex + 1,
-    totalQuestions: questions.length,
-    players: hostGetPlayerNames(),
-  };
-
-  hostBroadcast(msg);
-  handleNewQuestion(msg);
-}
-
-function hostShowRoundResults() {
-  if (advanceTimer) clearTimeout(advanceTimer);
-  gameState = 'showing-results';
-
-  const players = hostGetPlayersList();
-  const voteCounts = {};
-  for (const p of players) voteCounts[p.name] = 0;
-  for (const votedName of currentVotes.values()) {
-    if (voteCounts[votedName] !== undefined) voteCounts[votedName]++;
-  }
-  for (const [name, count] of Object.entries(voteCounts)) {
-    stats[name] = (stats[name] || 0) + count;
-  }
-  roundHistory.push({ question: questions[currentQuestionIndex], votes: { ...voteCounts } });
-
-  const msg = {
-    type: 'round-results',
-    question: questions[currentQuestionIndex],
-    votes: voteCounts,
-    stats: { ...stats },
-    questionNumber: currentQuestionIndex + 1,
-    totalQuestions: questions.length,
-  };
-
-  hostBroadcast(msg);
-  handleRoundResults(msg);
-
-  advanceTimer = setTimeout(() => {
-    currentQuestionIndex++;
-    if (currentQuestionIndex >= questions.length) {
-      hostEndGame();
+  // Manage Screen Transitions
+  if (state.gameState === 'lobby') {
+    if (!screens.lobby.classList.contains('active')) showScreen('lobby');
+    // reset vote state
+    hasVoted = false;
+  } else if (state.gameState === 'playing') {
+    const isNewQuestion = !screens.question.classList.contains('active') || dom.questionNumber.textContent !== String(state.currentQuestionIndex + 1);
+    
+    if (isNewQuestion) {
+        handleNewQuestion(state);
     } else {
-      hostSendQuestion();
+        handleVoteUpdate(state);
     }
-  }, ADVANCE_DELAY);
-}
-
-function hostEndGame() {
-  const msg = {
-    type: 'game-over',
-    stats,
-    roundHistory,
-    totalQuestions: questions.length,
-  };
-
-  hostBroadcast(msg);
-  handleGameOver(msg);
-
-  gameState = 'lobby';
-  currentQuestionIndex = 0;
-  currentVotes = new Map();
-  isReady = false;
-  for (const [, data] of hostConns) data.ready = false;
-
-  setTimeout(() => hostBroadcastPlayers(), 500);
-}
-
-function hostHandleDisconnect(peerId) {
-  const data = hostConns.get(peerId);
-  if (data) log(`Player disconnected: ${data.name}`);
-  hostConns.delete(peerId);
-  currentVotes.delete(peerId);
-  hostBroadcastPlayers();
-
-  if (gameState === 'playing') {
-    const total = hostGetPlayersList().length;
-    if (total > 0 && currentVotes.size === total) {
-      hostShowRoundResults();
+  } else if (state.gameState === 'showing-results') {
+    if (!screens.roundResults.classList.contains('active')) {
+        handleRoundResults(state);
+    }
+  } else if (state.gameState === 'game-over') {
+    if (!screens.gameover.classList.contains('active')) {
+        handleGameOver(state);
     }
   }
-}
 
-function hostListenForConnections() {
-  peer.on('connection', (conn) => {
-    log('Incoming connection from: ' + conn.peer);
-
-    conn.on('data', (raw) => {
-      const msg = parseMsg(raw);
-      if (!msg) return;
-
-      if (msg.type === 'join') {
-        if (gameState !== 'lobby') {
-          safeSend(conn, { type: 'error-msg', message: 'El juego ya ha empezado. Espera a que termine.' });
-          setTimeout(() => conn.close(), 500);
-          return;
-        }
-
-        const existing = hostGetPlayerNames();
-        if (existing.some((n) => n.toLowerCase() === msg.name.toLowerCase())) {
-          safeSend(conn, { type: 'error-msg', message: 'Ese nombre ya está en uso.' });
-          setTimeout(() => conn.close(), 500);
-          return;
-        }
-
-        hostConns.set(conn.peer, { conn, name: msg.name, ready: false });
-        log(`Player joined: ${msg.name} (${conn.peer})`);
-        safeSend(conn, { type: 'joined', name: msg.name });
-        hostBroadcastPlayers();
-        return;
+  // Host Logic for auto-advancing rounds
+  if (isHost) {
+    if (state.gameState === 'lobby') {
+      const allReady = state.players.length >= 2 && state.players.every(p => p.ready);
+      if (allReady && !window.startingGame) {
+         window.startingGame = true;
+         hostStartGame();
       }
-
-      hostHandleMessage(conn.peer, msg);
-    });
-
-    conn.on('close', () => hostHandleDisconnect(conn.peer));
-    conn.on('error', (err) => {
-      log('Connection error from ' + conn.peer + ': ' + err);
-      hostHandleDisconnect(conn.peer);
-    });
-  });
-}
-
-// ═══════════════════════════════════════════════════════════
-// CLIENT LOGIC
-// ═══════════════════════════════════════════════════════════
-
-function clientSend(msg) {
-  safeSend(hostConn, msg);
-}
-
-function clientHandleMessage(msg) {
-  switch (msg.type) {
-    case 'joined':
-      myName = msg.name;
-      log('Joined room as: ' + myName);
-      showScreen('lobby');
-      break;
-    case 'error-msg':
-      showScreen('login');
-      showError(msg.message);
-      destroyPeer();
-      break;
-    case 'players-update':
-      handlePlayersUpdate(msg.players);
-      break;
-    case 'game-started':
-      break;
-    case 'new-question':
-      handleNewQuestion(msg);
-      break;
-    case 'vote-update':
-      handleVoteUpdate(msg);
-      break;
-    case 'round-results':
-      handleRoundResults(msg);
-      break;
-    case 'game-over':
-      handleGameOver(msg);
-      break;
+    } else if (state.gameState === 'showing-results') {
+      if (!window.advanceTimer) {
+        window.advanceTimer = setTimeout(() => {
+          apiCall('nextQuestion', { playerId: myId });
+          window.advanceTimer = null;
+        }, ADVANCE_DELAY);
+      }
+    } else {
+      if (window.advanceTimer) {
+         clearTimeout(window.advanceTimer);
+         window.advanceTimer = null;
+      }
+    }
+  }
+  
+  // Sync my local ready state if needed
+  const me = state.players.find(p => p.id === myId);
+  if (me) {
+      isReady = me.ready;
+      dom.btnReady.classList.toggle('ready', isReady);
+      dom.btnReadyText.textContent = isReady ? '¡Listo! ✓' : 'Estoy listo';
   }
 }
 
-// ═══════════════════════════════════════════════════════════
-// SHARED UI HANDLERS
-// ═══════════════════════════════════════════════════════════
+async function hostStartGame() {
+  try {
+     const questions = await loadQuestions();
+     await apiCall('start', { playerId: myId, questions: questions });
+  } catch(e) {
+     showError(e.message);
+  }
+  window.startingGame = false;
+}
+
+// ── UI Updaters ────────────────────────────────────────────
 
 function handlePlayersUpdate(players) {
   dom.playerCount.textContent = players.length;
@@ -492,20 +232,20 @@ function handlePlayersUpdate(players) {
     .join('');
 }
 
-function handleNewQuestion(data) {
+function handleNewQuestion(state) {
   hasVoted = false;
 
-  dom.questionNumber.textContent = data.questionNumber;
-  dom.totalQuestions.textContent = data.totalQuestions;
-  dom.progressFill.style.width = `${(data.questionNumber / data.totalQuestions) * 100}%`;
-  dom.questionText.textContent = data.question + '?';
+  dom.questionNumber.textContent = state.currentQuestionIndex + 1;
+  dom.totalQuestions.textContent = state.totalQuestions;
+  dom.progressFill.style.width = `${((state.currentQuestionIndex + 1) / state.totalQuestions) * 100}%`;
+  dom.questionText.textContent = state.currentQuestion + '?';
 
-  dom.voteOptions.innerHTML = data.players
+  dom.voteOptions.innerHTML = state.players
     .map(
-      (name, i) => `
-      <button class="btn-vote" data-name="${escapeAttr(name)}" style="animation-delay: ${i * 0.08}s">
-        <span class="vote-avatar">${getInitial(name)}</span>
-        <span class="vote-name">${escapeHtml(name)}</span>
+      (p, i) => `
+      <button class="btn-vote" data-name="${escapeAttr(p.name)}" style="animation-delay: ${i * 0.08}s">
+        <span class="vote-avatar">${getInitial(p.name)}</span>
+        <span class="vote-name">${escapeHtml(p.name)}</span>
       </button>`
     )
     .join('');
@@ -521,39 +261,30 @@ function handleNewQuestion(data) {
 
       const votedName = btn.dataset.name;
 
-      if (isHost) {
-        currentVotes.set('__host__', votedName);
-        const total = hostGetPlayersList().length;
-        const voteUpdate = { type: 'vote-update', voted: currentVotes.size, total };
-        hostBroadcast(voteUpdate);
-        handleVoteUpdate(voteUpdate);
-        if (currentVotes.size === total) hostShowRoundResults();
-      } else {
-        clientSend({ type: 'vote', name: votedName });
-      }
+      apiCall('vote', { playerId: myId, targetName: votedName });
 
       dom.voteStatus.classList.remove('hidden');
       if (navigator.vibrate) navigator.vibrate(40);
     });
   });
 
-  dom.votesCast.textContent = '0';
-  dom.votesTotal.textContent = data.players.length;
+  dom.votesCast.textContent = state.votesCast;
+  dom.votesTotal.textContent = state.players.length;
   dom.voteStatus.classList.add('hidden');
 
   showScreen('question');
 }
 
-function handleVoteUpdate(data) {
-  dom.votesCast.textContent = data.voted;
-  dom.votesTotal.textContent = data.total;
+function handleVoteUpdate(state) {
+  dom.votesCast.textContent = state.votesCast;
+  dom.votesTotal.textContent = state.players.length;
   if (hasVoted) dom.voteStatus.classList.remove('hidden');
 }
 
-function handleRoundResults(data) {
-  dom.roundQuestion.textContent = '¿Quién es más probable que ' + data.question + '?';
+function handleRoundResults(state) {
+  dom.roundQuestion.textContent = '¿Quién es más probable que ' + state.currentQuestion + '?';
 
-  const sorted = Object.entries(data.votes).sort((a, b) => b[1] - a[1]);
+  const sorted = Object.entries(state.roundResults).sort((a, b) => b[1] - a[1]);
   const maxVotes = Math.max(...sorted.map(([, v]) => v), 1);
 
   dom.roundVotes.innerHTML = sorted
@@ -582,20 +313,20 @@ function handleRoundResults(data) {
   showScreen('roundResults');
 }
 
-function handleGameOver(data) {
-  const sorted = Object.entries(data.stats).sort((a, b) => b[1] - a[1]);
-  const maxVotes = sorted.length > 0 ? sorted[0][1] : 1;
+function handleGameOver(state) {
+  const sorted = [...state.players].sort((a, b) => b.stats - a.stats);
+  const maxVotes = sorted.length > 0 ? sorted[0].stats : 1;
 
   dom.finalRanking.innerHTML = sorted
-    .map(([name, totalVotes], i) => {
+    .map((p, i) => {
       const medal = i === 0 ? '👑' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
-      const barPct = maxVotes > 0 ? (totalVotes / maxVotes) * 100 : 0;
+      const barPct = maxVotes > 0 ? (p.stats / maxVotes) * 100 : 0;
       return `
         <div class="ranking-item ${i === 0 ? 'champion' : ''}" style="animation-delay: ${i * 0.15}s">
           <div class="ranking-medal">${medal}</div>
           <div class="ranking-info">
-            <span class="ranking-name">${escapeHtml(name)}</span>
-            <span class="ranking-votes">${totalVotes} voto${totalVotes !== 1 ? 's' : ''} totales</span>
+            <span class="ranking-name">${escapeHtml(p.name)}</span>
+            <span class="ranking-votes">${p.stats} voto${p.stats !== 1 ? 's' : ''} totales</span>
           </div>
           <div class="ranking-bar-container">
             <div class="ranking-bar" style="--bar-width: ${barPct}%; animation-delay: ${i * 0.15 + 0.3}s"></div>
@@ -608,64 +339,50 @@ function handleGameOver(data) {
   if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 200]);
 }
 
-// ═══════════════════════════════════════════════════════════
-// EVENT LISTENERS
-// ═══════════════════════════════════════════════════════════
+// ── Event Listeners ────────────────────────────────────────
 
-// ── Create Room ────────────────────────────────────────────
+// Create Room
 dom.btnCreate.addEventListener('click', async () => {
+  if (!API_URL || API_URL.includes('URL_DE_TU_WEB_APP')) {
+     showError("No has configurado el API_URL en app.js");
+     return;
+  }
   const name = dom.inputName.value.trim();
   if (!name) { showError('Escribe tu nombre'); return; }
   if (name.length > 15) { showError('Nombre demasiado largo (máx. 15)'); return; }
 
   myName = name;
-  isHost = true;
 
   dom.btnCreate.disabled = true;
   dom.btnJoin.disabled = true;
   showScreen('connecting');
-  dom.connectingText.textContent = 'Creando sala…';
+  dom.connectingText.textContent = 'Creando sala en Google Sheets…';
 
-  try {
-    await loadQuestions();
-
-    // Try up to 3 times with different codes in case of ID conflict
-    let attempts = 0;
-    while (attempts < 3) {
-      roomCode = generateCode();
-      try {
-        peer = await createPeer(ROOM_PREFIX + roomCode);
-        break;
-      } catch (err) {
-        attempts++;
-        if (attempts >= 3) throw err;
-        log('Retrying with different code...');
-      }
-    }
-
-    hostListenForConnections();
-
-    // Also listen for late errors on the peer (e.g. peer-unavailable for clients)
-    peer.on('error', (err) => {
-      log('Late peer error: ' + err.type + ' - ' + err.message);
-    });
-
-    dom.roomCodeValue.textContent = roomCode;
-    hostBroadcastPlayers();
-    showScreen('lobby');
-    log('Room created: ' + roomCode);
-  } catch (err) {
+  const res = await apiCall('create', { name: myName });
+  
+  dom.btnCreate.disabled = false;
+  dom.btnJoin.disabled = false;
+  
+  if (res.error) {
     showScreen('login');
-    showError(err.message || 'Error al crear la sala');
-    destroyPeer();
-  } finally {
-    dom.btnCreate.disabled = false;
-    dom.btnJoin.disabled = false;
+    showError(res.error);
+  } else {
+    roomCode = res.roomCode;
+    myId = res.playerId;
+    isHost = res.isHost;
+    dom.roomCodeValue.textContent = roomCode;
+    showScreen('lobby');
+    pollInterval = setInterval(pollState, 2000);
+    log('Room created: ' + roomCode);
   }
 });
 
-// ── Join Room ──────────────────────────────────────────────
+// Join Room
 dom.btnJoin.addEventListener('click', async () => {
+  if (!API_URL || API_URL.includes('URL_DE_TU_WEB_APP')) {
+     showError("No has configurado el API_URL en app.js");
+     return;
+  }
   const name = dom.inputName.value.trim();
   const code = dom.inputCode.value.trim().toUpperCase();
 
@@ -674,7 +391,6 @@ dom.btnJoin.addEventListener('click', async () => {
   if (!code || code.length !== 4) { showError('Introduce el código de 4 caracteres'); return; }
 
   myName = name;
-  isHost = false;
   roomCode = code;
 
   dom.btnCreate.disabled = true;
@@ -682,70 +398,25 @@ dom.btnJoin.addEventListener('click', async () => {
   showScreen('connecting');
   dom.connectingText.textContent = 'Conectando a la sala…';
 
-  try {
-    peer = await createPeer(undefined);
+  const res = await apiCall('join', { name: myName, roomCode: roomCode });
 
-    // Listen for peer-level errors (peer-unavailable fires HERE, not on the connection)
-    let joinRejector = null;
-    peer.on('error', (err) => {
-      log('Peer error while joining: ' + err.type);
-      if (err.type === 'peer-unavailable') {
-        if (joinRejector) joinRejector(new Error('No se encontró la sala. ¿El código es correcto?'));
-      }
-    });
+  dom.btnCreate.disabled = false;
+  dom.btnJoin.disabled = false;
 
-    hostConn = peer.connect(ROOM_PREFIX + code, {
-      reliable: true,
-      serialization: 'json',
-    });
-
-    // Register data handler BEFORE open to avoid missing messages
-    hostConn.on('data', (raw) => {
-      const msg = parseMsg(raw);
-      if (msg) clientHandleMessage(msg);
-    });
-
-    // Handle host disconnection
-    hostConn.on('close', () => {
-      log('Disconnected from host');
-      alert('El anfitrión se ha desconectado.');
-      showScreen('login');
-      destroyPeer();
-    });
-
-    hostConn.on('error', (err) => {
-      log('Connection error: ' + err);
-    });
-
-    // Wait for the connection to open
-    await new Promise((resolve, reject) => {
-      joinRejector = reject;
-
-      const timeout = setTimeout(() => {
-        reject(new Error('No se encontró la sala. ¿El código es correcto?'));
-      }, 12000);
-
-      hostConn.on('open', () => {
-        clearTimeout(timeout);
-        log('Connected to host, sending join...');
-        safeSend(hostConn, { type: 'join', name });
-        resolve();
-      });
-    });
-
-    dom.roomCodeValue.textContent = roomCode;
-    log('Joined room: ' + roomCode);
-  } catch (err) {
+  if (res.error) {
     showScreen('login');
-    showError(err.message || 'Error al conectar');
-    destroyPeer();
-  } finally {
-    dom.btnCreate.disabled = false;
-    dom.btnJoin.disabled = false;
+    showError(res.error);
+  } else {
+    myId = res.playerId;
+    isHost = res.isHost;
+    dom.roomCodeValue.textContent = roomCode;
+    showScreen('lobby');
+    pollInterval = setInterval(pollState, 2000);
+    log('Joined room: ' + roomCode);
   }
 });
 
-// ── Enter key on inputs ────────────────────────────────────
+// Enter key on inputs
 dom.inputName.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     if (dom.inputCode.value.trim()) {
@@ -764,7 +435,7 @@ dom.inputCode.addEventListener('input', () => {
   dom.inputCode.value = dom.inputCode.value.toUpperCase();
 });
 
-// ── Copy room code ─────────────────────────────────────────
+// Copy room code
 dom.btnCopyCode.addEventListener('click', () => {
   navigator.clipboard.writeText(roomCode).then(() => {
     dom.btnCopyCode.textContent = '✅';
@@ -781,25 +452,17 @@ dom.btnCopyCode.addEventListener('click', () => {
   });
 });
 
-// ── Ready Toggle ───────────────────────────────────────────
+// Ready Toggle
 dom.btnReady.addEventListener('click', () => {
   isReady = !isReady;
-  dom.btnReady.classList.toggle('ready', isReady);
-  dom.btnReadyText.textContent = isReady ? '¡Listo! ✓' : 'Estoy listo';
-
-  if (isHost) {
-    hostBroadcastPlayers();
-    hostCheckAllReady();
-  } else {
-    clientSend({ type: 'ready' });
-  }
+  apiCall('ready', { playerId: myId });
 });
 
-// ── Play Again ─────────────────────────────────────────────
+// Play Again
 dom.btnPlayAgain.addEventListener('click', () => {
-  isReady = false;
-  hasVoted = false;
-  dom.btnReady.classList.remove('ready');
-  dom.btnReadyText.textContent = 'Estoy listo';
-  showScreen('lobby');
+  if (isHost) {
+      apiCall('playAgain', { playerId: myId });
+  } else {
+      showScreen('lobby'); // The host click will sync everyone else via polling
+  }
 });
